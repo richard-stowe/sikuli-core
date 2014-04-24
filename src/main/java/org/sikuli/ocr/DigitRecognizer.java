@@ -1,11 +1,11 @@
 package org.sikuli.ocr;
 
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Rectangle;
-import java.awt.image.BufferedImage;
-import java.util.List;
-
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import edu.umd.cs.piccolo.PLayer;
+import edu.umd.cs.piccolo.nodes.PImage;
+import edu.umd.cs.piccolo.nodes.PText;
+import org.imgscalr.Scalr;
 import org.sikuli.core.cv.TextMap;
 import org.sikuli.core.draw.ImageRenderer;
 import org.sikuli.core.draw.PiccoloImageRenderer;
@@ -16,15 +16,16 @@ import org.sikuli.core.search.RegionMatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.Lists;
-
-import edu.umd.cs.piccolo.PLayer;
-import edu.umd.cs.piccolo.nodes.PImage;
-import edu.umd.cs.piccolo.nodes.PText;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 public class DigitRecognizer {
 
-	final static private ImageExplainer explainer = ImageExplainer.getExplainer(DigitRecognizer.class);
+    final static private ImageExplainer explainer = ImageExplainer.getExplainer(DigitRecognizer.class);
 	final static private Logger logger = LoggerFactory.getLogger(DigitRecognizer.class);
 
 	// Digit search parameters
@@ -32,117 +33,126 @@ public class DigitRecognizer {
 	static final double DIGIT_MATCH_MIN_SCORE = 0.65;
 
 	// Digit template parameters
-	static final int dy=20;
-	static final int dx=12;
-	static final int margin=5;
+	static final int digitY = 20;
+	static final int digitX = 12;
+	static final int margin = 5;
+    private static final int TEMPLATE_ROWS = 10;
+    private static final int TEMPLATE_FONT_SIZE = 15;
+    private static final int TRACKING = 0;
 
-	static ImageSearcher digitImageSearcher = new ImageSearcher(generateDigitTemplateImage());
+    static ImageSearcher digitImageSearcher = new ImageSearcher(generateDigitTemplateImage());
 
-	private DigitRecognizer(){		
+	private DigitRecognizer(){
 	}
-	
-	static private Integer convertLocationToDigit(int x, int y){
-		int i = Math.round((x - margin) / dx);
-		int px = (x - margin) % dx;
-		int py = (y - margin) % dy;
-		if (px < 3 && py > 3)
-			return null;
-		else
-			return i;
+
+	static private Integer convertLocationToDigit(int x){
+		return Math.round((x - margin) / digitX);
 	}
+
 	static private BufferedImage generateDigitTemplateImage(){
-		final List<Font> fonts = Lists.newArrayList();
-		fonts.add(new Font("sansserif",0,0));
-		fonts.add(new Font("serif",0,0));
-		fonts.add(new Font("monaco",0,0));
-		PiccoloImageRenderer a = new PiccoloImageRenderer(130,dy*7*fonts.size()+20){
+
+        final List<Font> fonts = Lists.newArrayList();
+        fonts.add(new Font("sansserif",0,0));
+        fonts.add(new Font("serif",0,0));
+        fonts.add(new Font("monaco",0,0));
+
+		PiccoloImageRenderer canvas = new PiccoloImageRenderer(digitX * TEMPLATE_ROWS + digitX, digitY * fonts.size() + digitY){
 
 			@Override
 			protected void addContent(PLayer layer) {
 				int x = margin;
 				int y = margin;
 				for (Font font : fonts){
-					for (int size = 9; size <= 15; ++ size){
-						for (int i=0;i<=9;i++){		
-							BufferedImage digitImage = TextImageRenderer.render(""+i, font, size, 0);
-							PImage pi = new PImage(digitImage);
-							pi.setOffset(x,y);
-							layer.addChild(pi);
-							x += dx;						
-						}
-						y += dy;
-						x = margin;
-					}
+                    for (int i=0;i<=9;i++){
+                        BufferedImage digitImage = TextImageRenderer.render(""+i, font, TEMPLATE_FONT_SIZE, TRACKING);
+                        PImage pi = new PImage(digitImage);
+                        pi.setOffset(x,y);
+                        layer.addChild(pi);
+                        x += digitX;
+                    }
+                    y += digitY;
+                    x = margin;
 				}
-			}			
+			}
 		};
-		explainer.step(a, "generated digit template images");
-		return a.render();
+		explainer.step(canvas, "generated digit template images");
+		return canvas.render();
 	}
-	
+
 
 	static public List<RecognizedDigit> recognize(BufferedImage inputImage){
 
-		List<RecognizedDigit> recognizedDigits = Lists.newArrayList(); 
+		List<RecognizedDigit> recognizedDigits = Lists.newArrayList();
 
 		TextMap tm = TextMap.createFrom(inputImage);
+
 		for (Rectangle r : tm.getCharacterBounds()){
 			recognizeDigit(inputImage, r, digitImageSearcher, recognizedDigits);
-		}		
-		
+		}
+
 		explainer.step(visualize(inputImage, recognizedDigits), "recognized digits");
-		
+
 		return recognizedDigits;
 	}
-	
+
 	static private ImageRenderer visualize(BufferedImage inputImage, final List<RecognizedDigit> recognizedDigits){
 		return new PiccoloImageRenderer(inputImage){
 			@Override
 			protected void addContent(PLayer layer) {
-				for (RecognizedDigit r : recognizedDigits){				
+				for (RecognizedDigit r : recognizedDigits){
 					//Rectangle r = md.bounds;
 					PText t = new PText(""+r.digit);
 					t.setOffset(r.x, r.y+r.height);
 					t.setScale(0.7f);
 					t.setTextPaint(Color.red);
-					layer.addChild(t);					
+					layer.addChild(t);
 				}
-			}			
+			}
 		};
 	}
 
-	static private void recognizeDigit(BufferedImage inputImage, Rectangle r, ImageSearcher digitImageSearcher, 
+    static private void recognizeDigit(BufferedImage inputImage, Rectangle r, final ImageSearcher digitImageSearcher,
 			List<RecognizedDigit> recognizedDigits){
-		if (r.width == 0 || r.height <= 3)
+
+        if (r.width == 0 || r.height <= 3)
 			return;
 
-		BufferedImage charImage = inputImage.getSubimage(r.x, r.y, r.width, r.height);		
-		ImageQuery q = new ImageQuery(charImage);
-		List<RegionMatch> matches = digitImageSearcher.search(q,null,1);
+		final BufferedImage charImage = inputImage.getSubimage(r.x, r.y, r.width, r.height);
 
-		RegionMatch m = matches.get(0);
-		double score = m.getScore();
-		Integer i = convertLocationToDigit(m.x,m.y);
+        List<RegionMatch> matches = new ArrayList<RegionMatch>(){{
+            addAll(digitImageSearcher.search(new ImageQuery(Scalr.resize(charImage, Scalr.Method.ULTRA_QUALITY, digitX)), null, 1));
+            addAll(digitImageSearcher.search(new ImageQuery(Scalr.resize(charImage, Scalr.Method.ULTRA_QUALITY, digitX - 1)), null, 1));
+            addAll(digitImageSearcher.search(new ImageQuery(Scalr.resize(charImage, Scalr.Method.ULTRA_QUALITY, digitX - 2)), null, 1));
+        }};
 
-		logger.trace("[" + i + "] (" + m.x + "," + m.y + ") score: " + score);
+        Collections.sort(matches, Collections.reverseOrder(new Comparator<RegionMatch>() {
+            @Override
+            public int compare(RegionMatch regionMatch1, RegionMatch regionMatch2) {
+                return Double.compare(regionMatch1.getScore(), regionMatch2.getScore());
+            }
+        }));
 
-		if (score > DIGIT_MATCH_MIN_SCORE && i != null){
-			RecognizedDigit md = new RecognizedDigit();
+        RegionMatch bestRegionMatch = Iterables.getFirst(matches, null);
+
+		if (bestRegionMatch != null && bestRegionMatch.getScore() > DIGIT_MATCH_MIN_SCORE){
+            Integer i = convertLocationToDigit(bestRegionMatch.x);
+
+            logger.trace("[" + i + "] (" + bestRegionMatch.x + "," + bestRegionMatch.y + ") score: " + bestRegionMatch.getScore());
+
+            RecognizedDigit md = new RecognizedDigit();
 			md.x = r.x;
 			md.y = r.y;
 			md.width = r.width;
 			md.height = r.height;
 			md.digit = Integer.toString(i).charAt(0);
 			recognizedDigits.add(md);
-		}else{
-
-			if (r.width > HORIZONTAL_SPLIT_THRESHOLD){				
+		} else {
+			if (r.width > HORIZONTAL_SPLIT_THRESHOLD){
 				Rectangle r1 = new Rectangle(r.x,r.y,r.width/2,r.height);
 				Rectangle r2 = new Rectangle(r.x + r.width/2,r.y,r.width/2,r.height);
 				recognizeDigit(inputImage, r1, digitImageSearcher, recognizedDigits);
-				recognizeDigit(inputImage, r2, digitImageSearcher, recognizedDigits);				
+				recognizeDigit(inputImage, r2, digitImageSearcher, recognizedDigits);
 			}
-
 		}
 	}
 }
